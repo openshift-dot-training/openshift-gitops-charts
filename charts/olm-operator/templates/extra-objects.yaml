@@ -1,0 +1,12 @@
+{{- range $obj := .Values.extraObjects }}
+{{- $o := deepCopy $obj }}
+{{- $md := $o.metadata | default dict }}
+{{- $ann := $md.annotations | default dict }}
+{{- if not (hasKey $ann "argocd.argoproj.io/sync-wave") }}
+{{- $_ := set $ann "argocd.argoproj.io/sync-wave" "10" }}
+{{- end }}
+{{- $_ := set $md "annotations" $ann }}
+{{- $_ := set $o "metadata" $md }}
+---
+{{ tpl (toYaml $o) $ }}
+{{- end }}

@@ -1,0 +1,4 @@
+# Automatic approval needs no version and renders no approver.
+# expect: map(select(.kind == "Job")) | length == 0
+# expect: map(select(.kind == "Subscription"))[0].spec.installPlanApproval == "Automatic"
+subscription: { name: grafana-operator, installPlanApproval: Automatic, channel: v5 }

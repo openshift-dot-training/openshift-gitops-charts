@@ -1,0 +1,27 @@
+{{- $s := .Values.subscription }}
+{{- $v := include "olm.version" . | fromYaml }}
+{{- $csv := include "olm.csv" . }}
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ required "subscription.name is required" $s.name }}
+  namespace: {{ include "olm.namespace" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-5"
+spec:
+  name: {{ $s.name }}
+  {{- with ($v.channel | default $s.channel) }}
+  channel: {{ . }}
+  {{- end }}
+  source: {{ $s.source }}
+  sourceNamespace: {{ $s.sourceNamespace }}
+  installPlanApproval: {{ include "olm.approval" . }}
+  {{- with $csv }}
+  # first install lands exactly on this CSV; later upgrades are approved by
+  # the installplan approver Job only when they match versions.<name>
+  startingCSV: {{ . }}
+  {{- end }}
+  {{- with $s.config }}
+  config:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}

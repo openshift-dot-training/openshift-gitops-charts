@@ -1,0 +1,105 @@
+# =============================================================================
+#  platform-catalog - hub chart (generic). Renders, for every component, an
+#  Argo CD ApplicationSet plus an ACM Placement / Policy / PlacementBinding that
+#  select the same clusters.
+#
+#  Everything environment-specific comes from the config repository
+#  (openshift-gitops-config): catalog.yaml (components, repos) and groups.yaml.
+#  Strings containing {{ ... }} are ApplicationSet go-templates; Helm copies
+#  them verbatim and Argo CD evaluates them per cluster.
+# =============================================================================
+
+argocd:
+  namespace: openshift-gitops
+  # AppProject of the generated (spoke) Applications
+  project: platform
+  # Keep workloads on a cluster when its Application is removed (cluster leaves
+  # a group, component removed from the catalog...). Strongly recommended for
+  # stateful components such as ODF or Portworx.
+  preserveResourcesOnDeletion: true
+
+acm:
+  # Hub namespace for Placements / Policies / PlacementBindings; it needs a
+  # ManagedClusterSetBinding for every cluster set below.
+  policyNamespace: platform-policies
+  clusterSets:
+    - global
+  # one "<component>-health" Policy (OperatorPolicy, inform) per component
+  healthPolicies: true
+
+# ManagedCluster labels (propagated to the Argo CD cluster secrets by
+# GitOpsCluster, which is what the ApplicationSet cluster generator matches).
+labels:
+  group: platform/group
+  componentPrefix: component.platform/
+  # optional per-cluster pins of the two repositories' revisions
+  chartsRevision: chartsRevision
+  configRevision: configRevision
+
+repos:
+  # openshift-gitops-charts: generic charts, released as tags
+  charts:
+    url: https://git.example.com/CHANGE-ME/openshift-gitops-charts.git
+    version: v0.1.0          # tag used unless a cluster sets the chartsRevision label
+  # openshift-gitops-config: what runs where
+  config:
+    url: https://git.example.com/CHANGE-ME/openshift-gitops-config.git
+    revision: main           # branch used unless a cluster sets the configRevision label
+
+# Helm value files read from the config repository, in order (later wins).
+# Placeholders: {component}; {group} = the cluster's platform/group label;
+# {cluster} = the cluster name (ManagedCluster / Argo CD cluster name).
+# Missing files are ignored.
+valueFiles:
+  - components/versions.yaml
+  - components/{component}/values.yaml
+  - group-values/{group}/versions.yaml
+  - group-values/{group}/{component}.yaml
+  - clusters/{cluster}/main-values.yaml
+  - clusters/{cluster}/values/{component}.yaml
+
+# Raw manifests synced with a component when it sets clusterManifests: true
+manifestsPath: clusters/{cluster}/manifests/{component}
+
+defaults:
+  chart: charts/olm-operator
+  clusterManifests: false
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true
+      - ServerSideApply=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 10m
+
+
+# =============================================================================
+#  Set by the config repository (catalog.yaml, groups.yaml)
+#
+#  components:
+#    <name>:
+#      enabled: true                 # false = render nothing for this component
+#      namespace: <ns>               # Argo CD destination namespace (required)
+#      chart: charts/olm-operator    # chart path (default: defaults.chart)
+#      repoURL: <url>                # chart repo (default: repos.charts.url)
+#      targetRevision: <rev>         # chart revision (default: repos.charts.version)
+#      clusterManifests: false       # also sync manifestsPath as raw YAML
+#      helmValues: |                 # inline values (go-template allowed); in
+#                                    # Argo CD these override ALL value files
+#      syncPolicy: {...}             # replaces defaults.syncPolicy
+#      ignoreDifferences: [...]
+#      operator: {name, namespace}   # Subscription checked by the ACM health policy
+#      extraPolicyTemplates: [...]   # extra ACM policy-templates
+#  common: [component, ...]          # every cluster with a platform/group label
+#  groups: {group: [component, ...]}
+# =============================================================================
+components: {}
+common: []
+groups: {}

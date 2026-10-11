@@ -1,0 +1,88 @@
+{{- $v := .Values -}}
+{{- range $name, $c := $v.components }}
+{{- if include "platform.enabled" $c }}
+{{- $sel := include "platform.selection" (dict "name" $name "root" $) | fromYaml }}
+{{- $health := and $v.acm.healthPolicies $c.operator }}
+{{- if or $health $c.extraPolicyTemplates }}
+---
+# Same cluster selection as ApplicationSet/{{ $name }} (predicates are OR-ed)
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: {{ $name }}
+  namespace: {{ $v.acm.policyNamespace }}
+  labels:
+    platform/component: {{ $name }}
+spec:
+  clusterSets:
+    {{- toYaml $v.acm.clusterSets | nindent 4 }}
+  predicates:
+    {{- with $sel.byGroup }}
+    - requiredClusterSelector:
+        labelSelector:
+          {{- toYaml . | nindent 10 }}
+    {{- end }}
+    - requiredClusterSelector:
+        labelSelector:
+          {{- toYaml $sel.optIn | nindent 10 }}
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Exists
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Exists
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: {{ $name }}-health
+  namespace: {{ $v.acm.policyNamespace }}
+  labels:
+    platform/component: {{ $name }}
+  annotations:
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+    policy.open-cluster-management.io/description: >-
+      Reports whether {{ $name }} (delivered by Argo CD ApplicationSet {{ $name }})
+      is installed and healthy. Inform only - Argo CD remains the deployer.
+spec:
+  disabled: false
+  remediationAction: inform
+  policy-templates:
+    {{- if $health }}
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1beta1
+        kind: OperatorPolicy
+        metadata:
+          name: {{ $name }}-operator
+        spec:
+          remediationAction: inform
+          severity: high
+          complianceType: musthave
+          subscription:
+            name: {{ $c.operator.name }}
+            namespace: {{ $c.operator.namespace | default $c.namespace }}
+          upgradeApproval: None
+    {{- end }}
+    {{- with $c.extraPolicyTemplates }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $v.acm.policyNamespace }}
+  labels:
+    platform/component: {{ $name }}
+placementRef:
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+  name: {{ $name }}
+subjects:
+  - apiGroup: policy.open-cluster-management.io
+    kind: Policy
+    name: {{ $name }}-health
+{{- end }}
+{{- end }}
+{{- end }}

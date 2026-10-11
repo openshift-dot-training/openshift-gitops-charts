@@ -1,0 +1,7 @@
+# CSV names that csvFormat cannot build (no "v"): versions.<release>.csv wins.
+# expect: map(select(.kind == "Subscription"))[0].spec.startingCSV == "kubernetes-nmstate-operator.4.20.0-202609291520"
+# expect: map(select(.kind == "Job"))[0].spec.template.spec.containers[0].env[] | select(.name == "WANT") | .value == "kubernetes-nmstate-operator.4.20.0-202609291520"
+subscription: { name: kubernetes-nmstate-operator }
+approver: { image: registry.example.com/CHANGE-ME/ose-cli:v4.18 }
+versions:
+  test: { channel: stable, version: 4.20.0-202609291520, csv: kubernetes-nmstate-operator.4.20.0-202609291520 }

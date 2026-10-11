@@ -1,0 +1,200 @@
+{{- /*
+InstallPlan approver - one per operator namespace.
+
+Argo CD cannot approve InstallPlans (OLM creates them with generated names), so
+with installPlanApproval: Manual nothing would ever install. This Sync hook Job
+approves the pending InstallPlan only if it carries exactly the CSV from
+versions.<component> (plus declared dependencies), then waits until that CSV
+is Succeeded. Anything else is refused and logged; if the expected CSV is not
+reached before the timeout the Job fails and the Argo CD sync shows Failed.
+
+Waves: RBAC -6, Subscription -5, this Job -4, operands (extraObjects) 10, so
+operands are only applied once the operator runs the exact version from Git.
+
+approver.extra adds the same approver for Subscriptions the operator creates
+itself at runtime (e.g. ACM -> multicluster-engine), in their own namespace and
+by default after the operands (wave 20/21), since an operand usually triggers them.
+*/ -}}
+{{- define "olm.approverSet" -}}
+{{- $c := . -}}
+{{- $a := $c.approver -}}
+{{- if $c.createNamespace }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $c.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.rbacWave | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $c.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.rbacWave | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $c.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.rbacWave | quote }}
+rules:
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["installplans"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["subscriptions", "clusterserviceversions"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $c.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $c.rbacWave | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $c.name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $c.name }}
+    namespace: {{ $c.namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $c.name }}
+  namespace: {{ $c.namespace }}
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: {{ $c.jobWave | quote }}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: {{ add $a.timeoutSeconds 120 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: installplan-approver
+        app.kubernetes.io/instance: {{ $c.name }}
+    spec:
+      serviceAccountName: {{ $c.name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: approver
+          image: {{ required "approver.image is required (oc client image, e.g. mirrored ose-cli) - set it in components/versions.yaml" $a.image }}
+          resources:
+            {{- toYaml $a.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: NS
+              value: {{ $c.namespace | quote }}
+            - name: SUBSCRIPTION
+              value: {{ $c.subscription | quote }}
+            - name: WANT
+              value: {{ $c.want | quote }}
+            - name: DEPENDENCIES
+              value: {{ $c.dependencies | default list | join " " | quote }}
+            - name: TIMEOUT
+              value: {{ $a.timeoutSeconds | quote }}
+            - name: POLL
+              value: {{ $a.pollSeconds | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              log() { echo "$(date -u +%H:%M:%S) $*"; }
+              deadline=$(( $(date +%s) + TIMEOUT ))
+              deps=" $DEPENDENCIES "
+              log "namespace=$NS subscription=$SUBSCRIPTION want=$WANT dependencies=[$DEPENDENCIES]"
+              while :; do
+                installed=$(oc get subscriptions.operators.coreos.com "$SUBSCRIPTION" -n "$NS" \
+                  -o jsonpath='{.status.installedCSV}' 2>/dev/null || true)
+                if [ "$installed" = "$WANT" ]; then
+                  phase=$(oc get clusterserviceversions.operators.coreos.com "$WANT" -n "$NS" \
+                    -o jsonpath='{.status.phase}' 2>/dev/null || true)
+                  if [ "$phase" = "Succeeded" ]; then
+                    log "OK: $WANT installed and Succeeded"
+                    exit 0
+                  fi
+                  log "$WANT installed, phase=${phase:-unknown} - waiting"
+                fi
+
+                oc get installplans.operators.coreos.com -n "$NS" -o \
+                  jsonpath='{range .items[*]}{.metadata.name}{" "}{.spec.approved}{" "}{.spec.clusterServiceVersionNames[*]}{"\n"}{end}' |
+                while read -r ip approved csvs; do
+                  [ "$approved" = "false" ] || continue
+                  case " $csvs " in
+                    *" $WANT "*) ;;
+                    *) log "SKIP $ip: proposes [$csvs], Git wants $WANT"; continue ;;
+                  esac
+                  extra=""
+                  for c in $csvs; do
+                    [ "$c" = "$WANT" ] && continue
+                    # a dependency entry is an exact CSV name or a CSV name prefix
+                    case "$deps" in *" $c "*|*" ${c%%.v[0-9]*} "*) ;; *) extra="$extra $c" ;; esac
+                  done
+                  if [ -n "$extra" ]; then
+                    log "REFUSE $ip: also contains$extra - not a declared dependency of $SUBSCRIPTION (one operator per namespace, or add it to subscription.dependencies)"
+                    continue
+                  fi
+                  log "APPROVE $ip: [$csvs]"
+                  oc patch installplans.operators.coreos.com "$ip" -n "$NS" --type merge -p '{"spec":{"approved":true}}'
+                done
+
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  log "FAIL: $WANT not reached after ${TIMEOUT}s (installed: ${installed:-none}). Is it mirrored, in the subscribed channel, and the newest version OLM can upgrade to?"
+                  exit 1
+                fi
+                sleep "$POLL"
+              done
+{{- end -}}
+
+{{- if eq (include "olm.approval" .) "Manual" }}
+{{- $v := include "olm.version" . | fromYaml }}
+{{- include "olm.approverSet" (dict
+      "name" (include "olm.approverName" .)
+      "namespace" (include "olm.namespace" .)
+      "subscription" .Values.subscription.name
+      "want" (include "olm.csv" .)
+      "dependencies" ($v.dependencies | default .Values.subscription.dependencies)
+      "rbacWave" "-6" "jobWave" "-4"
+      "approver" .Values.approver) }}
+{{- range $i, $e := .Values.approver.extra }}
+{{- $want := $e.csv | default "" }}
+{{- if $e.csvFromMain }}
+{{- /* same version as the main CSV: odf-operator.v4.18.3-rhodf -> odf-dependencies.v4.18.3-rhodf */}}
+{{- $want = printf "%s.v%s" $e.csvFromMain (regexReplaceAll "^.*?\\.v([0-9])" (include "olm.csv" $) "${1}") }}
+{{- end }}
+{{- if not $want }}
+{{- $ver := index $v ($e.versionKey | default "") | default "" }}
+{{- $want = printf $e.csvFormat (toString (required (printf "versions.%s.%s is required by approver.extra[%d] (%s)" $.Release.Name $e.versionKey $i $e.subscription) $ver)) }}
+{{- end }}
+{{- $wave := int ($e.wave | default 20) }}
+{{- include "olm.approverSet" (dict
+      "name" (printf "%s-%s-installplan-approver" $.Release.Name $e.subscription | trunc 63 | trimSuffix "-")
+      "namespace" $e.namespace
+      "createNamespace" $e.createNamespace
+      "subscription" $e.subscription
+      "want" $want
+      "dependencies" ((and $e.dependenciesKey (index $v $e.dependenciesKey)) | default $e.dependencies | default list)
+      "rbacWave" (toString $wave) "jobWave" (toString (add $wave 1))
+      "approver" $.Values.approver) }}
+{{- end }}
+{{- end }}

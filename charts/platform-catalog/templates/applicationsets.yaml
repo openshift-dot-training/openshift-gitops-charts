@@ -1,0 +1,79 @@
+{{- include "platform.validate" . -}}
+{{- $v := .Values -}}
+{{- range $name, $c := $v.components }}
+{{- if include "platform.enabled" $c }}
+{{- $sel := include "platform.selection" (dict "name" $name "root" $) | fromYaml }}
+---
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: {{ $name }}
+  namespace: {{ $v.argocd.namespace }}
+  labels:
+    platform/component: {{ $name }}
+  annotations:
+    platform/groups: {{ include "platform.groupsOf" (dict "name" $name "root" $) | quote }}
+spec:
+  goTemplate: true
+  syncPolicy:
+    preserveResourcesOnDeletion: {{ $v.argocd.preserveResourcesOnDeletion }}
+  # Generators are OR-ed; the two selectors are mutually exclusive so a cluster
+  # never produces two Applications with the same name.
+  generators:
+    {{- with $sel.byGroup }}
+    # clusters whose {{ $v.labels.group }} label includes "{{ $name }}" (minus opt-outs)
+    - clusters:
+        selector:
+          {{- toYaml . | nindent 10 }}
+    {{- end }}
+    # clusters explicitly opted in
+    - clusters:
+        selector:
+          {{- toYaml $sel.optIn | nindent 10 }}
+  template:
+    metadata:
+      name: '{{`{{ .name }}`}}-{{ $name }}'
+      labels:
+        platform/component: {{ $name }}
+        platform/cluster: '{{`{{ .name }}`}}'
+    spec:
+      project: {{ $v.argocd.project }}
+      destination:
+        server: '{{`{{ .server }}`}}'
+        namespace: {{ required (printf "components.%s.namespace is required" $name) $c.namespace }}
+      sources:
+        # 1. config repository, as a values reference (versions, component,
+        #    group and cluster values)
+        - repoURL: {{ $v.repos.config.url | toJson }}
+          targetRevision: {{ include "platform.configRevision" $ | toJson }}
+          ref: config
+        # 2. the chart (openshift-gitops-charts at the pinned tag by default)
+        - repoURL: {{ $c.repoURL | default $v.repos.charts.url | toJson }}
+          targetRevision: {{ $c.targetRevision | default (include "platform.chartsRevision" $) | toJson }}
+          path: {{ $c.chart | default $v.defaults.chart }}
+          helm:
+            releaseName: {{ $name }}
+            ignoreMissingValueFiles: true
+            # precedence (low -> high): chart values.yaml, then valueFiles in order
+            valueFiles:
+              {{- range $f := $v.valueFiles }}
+              - {{ printf "$config/%s" (include "platform.path" (dict "path" $f "name" $name "root" $)) | toJson }}
+              {{- end }}
+            {{- with $c.helmValues }}
+            values: |
+              {{- . | nindent 14 }}
+            {{- end }}
+        {{- if (hasKey $c "clusterManifests" | ternary $c.clusterManifests $v.defaults.clusterManifests) }}
+        # 3. raw per-cluster manifests from the config repository
+        - repoURL: {{ $v.repos.config.url | toJson }}
+          targetRevision: {{ include "platform.configRevision" $ | toJson }}
+          path: {{ include "platform.path" (dict "path" $v.manifestsPath "name" $name "root" $) | toJson }}
+        {{- end }}
+      syncPolicy:
+        {{- toYaml ($c.syncPolicy | default $v.defaults.syncPolicy) | nindent 8 }}
+      {{- with $c.ignoreDifferences }}
+      ignoreDifferences:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,9 @@
+# An extra approver whose versionKey is not set must not render.
+subscription: { name: advanced-cluster-management }
+approver:
+  image: registry.example.com/CHANGE-ME/ose-cli:v4.18
+  extra:
+    - { namespace: multicluster-engine, subscription: multicluster-engine, versionKey: mceVersion,
+        csvFormat: multicluster-engine.v%s }
+versions:
+  test: { channel: release-2.12, version: 2.12.3 }

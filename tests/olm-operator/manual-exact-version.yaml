@@ -1,0 +1,10 @@
+# Manual approval with an exact version: Subscription pinned, one approver.
+# expect: map(select(.kind == "Subscription"))[0].spec.startingCSV == "cluster-logging.v6.2.3"
+# expect: map(select(.kind == "Subscription"))[0].spec.installPlanApproval == "Manual"
+# expect: map(select(.kind == "Job")) | length == 1
+# expect: map(select(.kind == "Job"))[0].metadata.annotations."argocd.argoproj.io/sync-wave" == "-4"
+namespace: { labels: { openshift.io/cluster-monitoring: "true" } }
+subscription: { name: cluster-logging }
+approver: { image: registry.example.com/CHANGE-ME/ose-cli:v4.18 }
+versions:
+  test: { channel: stable-6.2, version: 6.2.3 }

@@ -1,0 +1,7 @@
+apiVersion: v2
+name: olm-operator
+description: >-
+  Generic OLM operator install (Namespace, OperatorGroup, Subscription) plus
+  optional operand objects (extraObjects) applied after the operator is ready.
+type: application
+version: 0.1.0

@@ -1,0 +1,12 @@
+# ACM creates multicluster-engine in another namespace after the MultiClusterHub.
+# expect: map(select(.kind == "Namespace" and .metadata.name == "multicluster-engine")) | length == 1
+# expect: map(select(.kind == "Job" and .metadata.namespace == "multicluster-engine"))[0].metadata.annotations."argocd.argoproj.io/sync-wave" == "21"
+# expect: map(select(.kind == "Job" and .metadata.namespace == "multicluster-engine"))[0].spec.template.spec.containers[0].env[] | select(.name == "WANT") | .value == "multicluster-engine.v2.7.3"
+subscription: { name: advanced-cluster-management }
+approver:
+  image: registry.example.com/CHANGE-ME/ose-cli:v4.18
+  extra:
+    - { namespace: multicluster-engine, subscription: multicluster-engine, versionKey: mceVersion,
+        channelKey: mceChannel, csvFormat: multicluster-engine.v%s, createNamespace: true }
+versions:
+  test: { channel: release-2.12, version: 2.12.3, mceChannel: stable-2.7, mceVersion: 2.7.3 }

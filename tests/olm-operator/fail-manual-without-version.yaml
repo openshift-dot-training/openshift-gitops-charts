@@ -1,0 +1,3 @@
+# Manual approval without versions.<release>.version must not render.
+subscription: { name: cluster-logging }
+approver: { image: registry.example.com/CHANGE-ME/ose-cli:v4.18 }

@@ -1,0 +1,3 @@
+common: [loki]
+groups:
+  group-a: [odf]
