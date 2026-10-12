@@ -5,10 +5,11 @@
 # expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].targetRevision == "{{ index .metadata.labels \"chartsRevision\" | default \"v0.1.0\" }}"
 # expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].helm.valueFiles[5] == "$config/clusters/{{ .name }}/values/odf.yaml"
 # expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].helm.valueFiles[2] == "$config/group-values/{{ index .metadata.labels \"platform/group\" | default \"_none\" }}/versions.yaml"
-# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "trident"))[0].spec.template.spec.sources[2].path == "clusters/{{ .name }}/manifests/trident"
+# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "external-chart"))[0].spec.template.spec.sources[2].path == "clusters/{{ .name }}/manifests/external-chart"
 # expect: map(select(.kind == "Placement")) | length == 2
 # expect: map(select(.kind == "Policy" and .metadata.name == "odf-health")) | length == 1
 components:
   odf: { namespace: openshift-storage, operator: { name: odf-operator } }
   loki: { namespace: openshift-operators-redhat, operator: { name: loki-operator } }
-  trident: { namespace: trident, repoURL: https://git.example.com/CHANGE-ME/charts.git, chart: charts/trident, clusterManifests: true }
+  # a component whose chart lives in another repository, with raw per-cluster manifests
+  external-chart: { namespace: external-chart, repoURL: https://git.example.com/CHANGE-ME/other-charts.git, chart: charts/any-chart, clusterManifests: true }
