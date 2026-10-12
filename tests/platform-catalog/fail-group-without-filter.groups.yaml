@@ -1,0 +1,3 @@
+# a group without any filter would select every cluster: refused
+groups:
+  everything: { components: [odf] }

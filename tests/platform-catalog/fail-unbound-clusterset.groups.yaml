@@ -1,0 +1,3 @@
+# a clusterSet that is not in acm.clusterSets has no ManagedClusterSetBinding
+groups:
+  group-x: { clusterSets: [not-bound], components: [odf] }

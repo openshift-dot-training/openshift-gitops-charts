@@ -8,7 +8,7 @@ and which versions, lives in the config repository, openshift-gitops-config.
 | Chart | Installed on | What it renders |
 |---|---|---|
 | `charts/olm-operator` | every managed cluster, once per operator (by an ApplicationSet) | Namespace, OperatorGroup, Subscription pinned to an exact CSV, the InstallPlan approver(s), operands (`extraObjects`) |
-| `charts/platform-catalog` | the ACM hub (root Application) | one ApplicationSet + ACM Placement / Policy / PlacementBinding per component, from the config repository's `catalog.yaml` and `groups.yaml` |
+| `charts/platform-catalog` | the ACM hub (root Application) | one ACM Placement + ApplicationSet (+ health Policy) per component; groups are Placement filters, from the config repository's `catalog.yaml` and `groups.yaml` |
 
 ## Releases
 
@@ -238,21 +238,57 @@ clusters do not use mirror sets, put the mirror registry path in
 
 ## platform-catalog
 
-Generic hub chart. For every component in `components` it renders:
+Generic hub chart. Clusters are selected by **ACM Placements**, not by a
+custom label convention. Inputs come from the config repository:
+`catalog.yaml` (components, repositories) and `groups.yaml`.
 
-- an ApplicationSet whose cluster generators select
-  `platform/group In (groups listing it)` (`Exists` for `common`), plus
-  clusters labelled `component.platform/<name>=enabled`, minus `=disabled`;
-- an ACM Placement with the same selector, a `<component>-health` Policy
-  (OperatorPolicy, inform) and a PlacementBinding.
+**Groups are ACM Placement filters.** Each group sets any combination of:
 
-Each generated Application is multi-source:
+| Filter | Example |
+|---|---|
+| `clusterSets` | `[prod]`: must be in `acm.clusterSets` (bound to the namespaces) |
+| `labelSelector` | your labels (`platform/group: group-a`) or labels ACM sets on every cluster, such as `openshiftVersion-major-minor`, `cloud`, `vendor`, `name` |
+| `claimSelector` | ClusterClaims such as `platform.open-cluster-management.io`, `region.open-cluster-management.io` |
+
+A group lists its `components`. Components in `common` are placed by every
+group. A group without any filter is refused, because it would select every
+cluster.
+
+**Per component** the chart renders the following:
+
+- An **ACM Placement** in the Argo CD namespace. It has one predicate per group
+  placing the component, and the predicates are OR-ed. Each group predicate
+  excludes clusters labelled `component.platform/<name>=enabled|disabled`. A
+  last predicate selects clusters labelled `component.platform/<name>=enabled`,
+  the per-cluster opt-in. Clusters marked unreachable or unavailable are
+  tolerated, so an outage does not delete their Applications.
+- An **ApplicationSet**. A `merge` generator takes the clusters from that
+  Placement's decisions (`clusterDecisionResource`, ConfigMap `acm-placement`)
+  and adds each cluster's labels from the `clusters` generator.
+- A **health Policy** (OperatorPolicy, inform), bound to an identical Placement
+  in the policy namespace. ACM governance and Argo CD always see the same
+  clusters.
+
+**Values per cluster.** Each generated Application is multi-source.
 
 - **Values** come from the config repository at the `configRevision` label
-  (default `main`), through `valueFiles`. The placeholders `{component}`,
-  `{group}` and `{cluster}` are filled per cluster.
+  (default `main`), through `valueFiles`. Paths use these placeholders:
+  - `{component}`;
+  - `{cluster}`, the ManagedCluster name;
+  - `{label:<key>}`, any cluster label. For example,
+    `ocp/{label:openshiftVersion-major-minor}/versions.yaml` picks the versions
+    of the operators pinned to the OpenShift release reported by ACM.
 - **The chart** comes from this repository at the `chartsRevision` label
   (default `repos.charts.version`), or from a component's own `repoURL`.
+
+**Hub prerequisites.** The config repository's `bootstrap/` creates the
+following:
+
+- the `acm-placement` ConfigMap;
+- read access to `placementdecisions` for the ApplicationSet controller;
+- a ManagedClusterSetBinding for every set in `acm.clusterSets`, in both
+  namespaces;
+- the GitOpsCluster, which registers the clusters in Argo CD.
 
 All fields are documented in `charts/platform-catalog/values.yaml`.
 

@@ -1,18 +1,28 @@
 {{/*
 Validate groups.yaml: every component referenced by a group (or common) must
-exist in the catalog.
+exist in the catalog; every group needs at least one filter; a group's
+clusterSets must be bound (acm.clusterSets).
 */}}
 {{- define "platform.validate" -}}
-{{- $components := .Values.components | default dict -}}
-{{- range $c := .Values.common | default list -}}
+{{- $v := .Values -}}
+{{- $components := $v.components | default dict -}}
+{{- range $c := $v.common | default list -}}
 {{- if not (hasKey $components $c) -}}
-{{- fail (printf "groups.yaml: common component %q is not defined in values.components" $c) -}}
+{{- fail (printf "groups.yaml: common component %q is not defined in the catalog (components)" $c) -}}
 {{- end -}}
 {{- end -}}
-{{- range $g, $list := .Values.groups | default dict -}}
-{{- range $c := $list -}}
+{{- range $g, $grp := $v.groups | default dict -}}
+{{- if not (or $grp.labelSelector $grp.claimSelector $grp.clusterSets) -}}
+{{- fail (printf "groups.yaml: group %q has no filter - set labelSelector, claimSelector and/or clusterSets" $g) -}}
+{{- end -}}
+{{- range $s := $grp.clusterSets | default list -}}
+{{- if not (has $s $v.acm.clusterSets) -}}
+{{- fail (printf "groups.yaml: group %q uses clusterSet %q, which is not in acm.clusterSets (needs a ManagedClusterSetBinding)" $g $s) -}}
+{{- end -}}
+{{- end -}}
+{{- range $c := $grp.components | default list -}}
 {{- if not (hasKey $components $c) -}}
-{{- fail (printf "groups.yaml: component %q (group %q) is not defined in values.components" $c $g) -}}
+{{- fail (printf "groups.yaml: component %q (group %q) is not defined in the catalog (components)" $c $g) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -27,78 +37,69 @@ Usage: include "platform.enabled" $component  -> "true" / ""
 {{- end -}}
 
 {{/*
-Cluster selection for one component, shared by the ApplicationSet (Argo CD
-cluster generator, matching Argo cluster-secret labels) and the Placement (ACM,
-matching ManagedCluster labels), so both always target the same clusters.
-
-Returns YAML:
-  byGroup: <labelSelector>   # only if the component is common or in >=1 group
-  optIn:   <labelSelector>   # clusters labelled component.platform/<name>=enabled
-
-byGroup excludes clusters carrying the component label with "enabled" (already
-covered by optIn, avoids duplicate Applications) or "disabled" (opt-out).
-
-Usage: include "platform.selection" (dict "name" $name "root" $) | fromYaml
-*/}}
-{{- define "platform.selection" -}}
-{{- $name := .name -}}
-{{- $v := .root.Values -}}
-{{- $compLabel := printf "%s%s" $v.labels.componentPrefix $name -}}
-{{- $groups := list -}}
-{{- range $g, $list := $v.groups | default dict -}}
-{{- if has $name $list -}}
-{{- $groups = append $groups $g -}}
-{{- end -}}
-{{- end -}}
-{{- $common := has $name ($v.common | default list) -}}
-{{- if or $common $groups }}
-byGroup:
-  matchExpressions:
-    - key: {{ $v.labels.group | quote }}
-      {{- if $common }}
-      operator: Exists
-      {{- else }}
-      operator: In
-      values: {{ $groups | sortAlpha | toJson }}
-      {{- end }}
-    - key: {{ $compLabel | quote }}
-      operator: NotIn
-      values: ["enabled", "disabled"]
-{{- end }}
-optIn:
-  matchLabels:
-    {{ $compLabel | quote }}: "enabled"
-{{- end -}}
-
-{{/*
-Groups that include a component (for labels/annotations). Usage:
-include "platform.groupsOf" (dict "name" $name "root" $)
+Groups that place a component, as a JSON list: every group for a common
+component, else the groups listing it.
+Usage: include "platform.groupsOf" (dict "name" $name "root" $) | fromJsonArray
 */}}
 {{- define "platform.groupsOf" -}}
 {{- $name := .name -}}
+{{- $v := .root.Values -}}
 {{- $out := list -}}
-{{- if has $name (.root.Values.common | default list) -}}
-{{- $out = append $out "common" -}}
-{{- end -}}
-{{- range $g, $list := .root.Values.groups | default dict -}}
-{{- if has $name $list -}}
+{{- $common := has $name ($v.common | default list) -}}
+{{- range $g, $grp := $v.groups | default dict -}}
+{{- if or $common (has $name ($grp.components | default list)) -}}
 {{- $out = append $out $g -}}
 {{- end -}}
 {{- end -}}
-{{- $out | sortAlpha | join "," -}}
+{{- $out | sortAlpha | toJson -}}
 {{- end -}}
 
 {{/*
-Config-repository path with {component}, {group} and {cluster} replaced; the
-last two become ApplicationSet go-templates evaluated per cluster.
+ACM Placement spec for one component, shared by the Placement the
+ApplicationSet reads (Argo CD namespace) and the one its health Policy binds
+(policy namespace), so both always select the same clusters.
+
+Predicates are OR-ed:
+  - one per group placing the component: the group's labelSelector (+ its
+    clusterSets, as the clusterset label) and claimSelector, minus clusters
+    labelled <componentPrefix><name>=enabled|disabled
+  - clusters labelled <componentPrefix><name>=enabled (per-cluster opt-in)
+Usage: include "platform.placementSpec" (dict "name" $name "root" $) | fromYaml
+*/}}
+{{- define "platform.placementSpec" -}}
+{{- $name := .name -}}
+{{- $v := .root.Values -}}
+{{- $compLabel := printf "%s%s" $v.labels.componentPrefix $name -}}
+{{- $preds := list -}}
+{{- range $g := include "platform.groupsOf" . | fromJsonArray -}}
+{{- $grp := index $v.groups $g -}}
+{{- $ls := deepCopy ($grp.labelSelector | default dict) -}}
+{{- $exprs := concat ($ls.matchExpressions | default list) (list (dict "key" $compLabel "operator" "NotIn" "values" (list "enabled" "disabled"))) -}}
+{{- with $grp.clusterSets -}}
+{{- $exprs = append $exprs (dict "key" "cluster.open-cluster-management.io/clusterset" "operator" "In" "values" .) -}}
+{{- end -}}
+{{- $_ := set $ls "matchExpressions" $exprs -}}
+{{- $sel := dict "labelSelector" $ls -}}
+{{- with $grp.claimSelector -}}
+{{- $_ := set $sel "claimSelector" . -}}
+{{- end -}}
+{{- $preds = append $preds (dict "requiredClusterSelector" $sel) -}}
+{{- end -}}
+{{- $preds = append $preds (dict "requiredClusterSelector" (dict "labelSelector" (dict "matchLabels" (dict $compLabel "enabled")))) -}}
+{{- toYaml (dict "clusterSets" $v.acm.clusterSets "predicates" $preds "tolerations" ($v.acm.tolerations | default list)) -}}
+{{- end -}}
+
+{{/*
+Config-repository path with placeholders filled per cluster:
+  {component}    the component name
+  {cluster}      the cluster name (ManagedCluster = Argo CD cluster)
+  {label:<key>}  the value of the cluster's label <key> ("_none" when unset),
+                 e.g. {label:openshiftVersion-major-minor}, set by ACM
 Usage: include "platform.path" (dict "path" $p "name" $component "root" $)
 */}}
 {{- define "platform.path" -}}
-{{- $v := .root.Values -}}
-{{- .path
-    | replace "{component}" .name
-    | replace "{group}" (printf "{{ index .metadata.labels %q | default \"_none\" }}" $v.labels.group)
-    | replace "{cluster}" "{{ .name }}" -}}
+{{- $p := .path | replace "{component}" .name | replace "{cluster}" "{{ .name }}" -}}
+{{- regexReplaceAll "\\{label:([^}]+)\\}" $p "{{ index .metadata.labels \"${1}\" | default \"_none\" }}" -}}
 {{- end -}}
 
 {{/* charts revision: the cluster's chartsRevision label, else repos.charts.version */}}

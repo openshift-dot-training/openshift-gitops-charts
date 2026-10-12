@@ -1,13 +1,23 @@
-# Minimal catalog for the hub chart tests.
+# Hub chart fixture: three components, groups as ACM Placement filters.
 # expect: map(select(.kind == "ApplicationSet")) | length == 3
-# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.generators[0].clusters.selector.matchExpressions[0].values | (length == 1 and .[0] == "group-a")
-# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "loki"))[0].spec.generators[0].clusters.selector.matchExpressions[0].operator == "Exists"
+# expect: map(select(.kind == "Placement" and .metadata.namespace == "openshift-gitops")) | length == 3
+# expect: map(select(.kind == "Placement" and .metadata.namespace == "platform-policies")) | length == 2
+# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.generators[0].merge.generators[0].clusterDecisionResource.labelSelector.matchLabels."cluster.open-cluster-management.io/placement" == "odf"
+# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.generators[0].merge.mergeKeys[0] == "name"
+# expect: map(select(.kind == "Placement" and .metadata.name == "odf" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates | length == 2
+# expect: map(select(.kind == "Placement" and .metadata.name == "odf" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates[0].requiredClusterSelector.labelSelector.matchLabels."platform/group" == "group-a"
+# expect: map(select(.kind == "Placement" and .metadata.name == "odf" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates[0].requiredClusterSelector.labelSelector.matchExpressions | map(select(.key == "cluster.open-cluster-management.io/clusterset"))[0].values[0] == "prod"
+# expect: map(select(.kind == "Placement" and .metadata.name == "odf" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates[0].requiredClusterSelector.labelSelector.matchExpressions | map(select(.key == "component.platform/odf"))[0].operator == "NotIn"
+# expect: map(select(.kind == "Placement" and .metadata.name == "odf" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates[1].requiredClusterSelector.labelSelector.matchLabels."component.platform/odf" == "enabled"
+# expect: map(select(.kind == "Placement" and .metadata.name == "loki" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates | length == 3
+# expect: map(select(.kind == "Placement" and .metadata.name == "loki" and .metadata.namespace == "openshift-gitops"))[0].spec.predicates[0].requiredClusterSelector.claimSelector.matchExpressions[0].key == "platform.open-cluster-management.io"
+# expect: map(select(.kind == "Placement" and .metadata.name == "odf")) as $p | ($p[0].spec | @json) == ($p[1].spec | @json)
 # expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].targetRevision == "{{ index .metadata.labels \"chartsRevision\" | default \"v0.1.0\" }}"
-# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].helm.valueFiles[5] == "$config/clusters/{{ .name }}/values/odf.yaml"
-# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].helm.valueFiles[2] == "$config/group-values/{{ index .metadata.labels \"platform/group\" | default \"_none\" }}/versions.yaml"
+# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].helm.valueFiles[2] == "$config/ocp/{{ index .metadata.labels \"openshiftVersion-major-minor\" | default \"_none\" }}/versions.yaml"
+# expect: map(select(.kind == "ApplicationSet" and .metadata.name == "odf"))[0].spec.template.spec.sources[1].helm.valueFiles[3] == "$config/clusters/{{ .name }}/main-values.yaml"
 # expect: map(select(.kind == "ApplicationSet" and .metadata.name == "external-chart"))[0].spec.template.spec.sources[2].path == "clusters/{{ .name }}/manifests/external-chart"
-# expect: map(select(.kind == "Placement")) | length == 2
-# expect: map(select(.kind == "Policy" and .metadata.name == "odf-health")) | length == 1
+acm:
+  clusterSets: [global, prod]
 components:
   odf: { namespace: openshift-storage, operator: { name: odf-operator } }
   loki: { namespace: openshift-operators-redhat, operator: { name: loki-operator } }
