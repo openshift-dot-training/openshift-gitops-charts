@@ -1,3 +1,17 @@
-common: [loki]
 groups:
-  group-a: [odf]
+  # a label set by you, restricted to one ClusterSet
+  group-a:
+    clusterSets: [prod]
+    labelSelector:
+      matchLabels: { platform/group: group-a }
+    components: [odf]
+  # labels and claims ACM sets on every cluster
+  baremetal-418:
+    labelSelector:
+      matchExpressions:
+        - { key: openshiftVersion-major-minor, operator: In, values: ["4.18"] }
+    claimSelector:
+      matchExpressions:
+        - { key: platform.open-cluster-management.io, operator: In, values: [BareMetal] }
+    components: []
+common: [loki]

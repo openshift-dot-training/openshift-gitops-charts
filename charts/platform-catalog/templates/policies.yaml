@@ -1,11 +1,10 @@
 {{- $v := .Values -}}
 {{- range $name, $c := $v.components }}
 {{- if include "platform.enabled" $c }}
-{{- $sel := include "platform.selection" (dict "name" $name "root" $) | fromYaml }}
 {{- $health := and $v.acm.healthPolicies $c.operator }}
 {{- if or $health $c.extraPolicyTemplates }}
 ---
-# Same cluster selection as ApplicationSet/{{ $name }} (predicates are OR-ed)
+# Same spec as Placement/{{ $name }} in the Argo CD namespace (placements.yaml)
 apiVersion: cluster.open-cluster-management.io/v1beta1
 kind: Placement
 metadata:
@@ -14,22 +13,7 @@ metadata:
   labels:
     platform/component: {{ $name }}
 spec:
-  clusterSets:
-    {{- toYaml $v.acm.clusterSets | nindent 4 }}
-  predicates:
-    {{- with $sel.byGroup }}
-    - requiredClusterSelector:
-        labelSelector:
-          {{- toYaml . | nindent 10 }}
-    {{- end }}
-    - requiredClusterSelector:
-        labelSelector:
-          {{- toYaml $sel.optIn | nindent 10 }}
-  tolerations:
-    - key: cluster.open-cluster-management.io/unreachable
-      operator: Exists
-    - key: cluster.open-cluster-management.io/unavailable
-      operator: Exists
+  {{- include "platform.placementSpec" (dict "name" $name "root" $) | nindent 2 }}
 ---
 apiVersion: policy.open-cluster-management.io/v1
 kind: Policy

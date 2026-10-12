@@ -19,18 +19,31 @@ argocd:
   preserveResourcesOnDeletion: true
 
 acm:
-  # Hub namespace for Placements / Policies / PlacementBindings; it needs a
-  # ManagedClusterSetBinding for every cluster set below.
+  # Hub namespace for the health Policies, their Placements and bindings.
   policyNamespace: platform-policies
+  # ManagedClusterSets every Placement may select from. Each needs a
+  # ManagedClusterSetBinding in the Argo CD namespace and the policy namespace.
+  # A group can narrow this down with its own clusterSets.
   clusterSets:
     - global
+  # Keep clusters that are temporarily unreachable in the decisions, so their
+  # Applications are not deleted during an outage.
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Exists
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Exists
+  # ConfigMap that teaches the ApplicationSet clusterDecisionResource generator
+  # to read PlacementDecisions (bootstrap creates it)
+  placementConfigMap: acm-placement
+  requeueAfterSeconds: 180
   # one "<component>-health" Policy (OperatorPolicy, inform) per component
   healthPolicies: true
 
-# ManagedCluster labels (propagated to the Argo CD cluster secrets by
-# GitOpsCluster, which is what the ApplicationSet cluster generator matches).
+# Labels read by this chart. Cluster selection itself is done by ACM
+# Placements from the group filters (groups.yaml).
 labels:
-  group: platform/group
+  # per-cluster exceptions: <prefix><component>=enabled | disabled
   componentPrefix: component.platform/
   # optional per-cluster pins of the two repositories' revisions
   chartsRevision: chartsRevision
@@ -47,14 +60,19 @@ repos:
     revision: main           # branch used unless a cluster sets the configRevision label
 
 # Helm value files read from the config repository, in order (later wins).
-# Placeholders: {component}; {group} = the cluster's platform/group label;
-# {cluster} = the cluster name (ManagedCluster / Argo CD cluster name).
+# Placeholders, filled per cluster:
+#   {component}    the component name
+#   {cluster}      the cluster name (ManagedCluster = Argo CD cluster name)
+#   {label:<key>}  the cluster's label <key> ("_none" when unset) - any
+#                  ManagedCluster label, including the ones ACM sets itself,
+#                  e.g. openshiftVersion-major-minor, cloud, vendor
 # Missing files are ignored.
 valueFiles:
   - components/versions.yaml
   - components/{component}/values.yaml
-  - group-values/{group}/versions.yaml
-  - group-values/{group}/{component}.yaml
+  # operators pinned to the OpenShift release: versions per release, picked by
+  # the release ACM reports for the cluster
+  - ocp/{label:openshiftVersion-major-minor}/versions.yaml
   - clusters/{cluster}/main-values.yaml
   - clusters/{cluster}/values/{component}.yaml
 
@@ -97,9 +115,14 @@ defaults:
 #      ignoreDifferences: [...]
 #      operator: {name, namespace}   # Subscription checked by the ACM health policy
 #      extraPolicyTemplates: [...]   # extra ACM policy-templates
-#  common: [component, ...]          # every cluster with a platform/group label
-#  groups: {group: [component, ...]}
+#  groups:                           # each group = ACM Placement filters
+#    <group>:
+#      clusterSets: [set, ...]        # optional; must be in acm.clusterSets
+#      labelSelector: {matchLabels, matchExpressions}   # ManagedCluster labels
+#      claimSelector: {matchExpressions}                # ClusterClaims
+#      components: [component, ...]
+#  common: [component, ...]           # placed by every group
 # =============================================================================
 components: {}
-common: []
 groups: {}
+common: []

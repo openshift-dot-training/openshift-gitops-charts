@@ -49,8 +49,10 @@ t=tests/platform-catalog
 if helm template catalog charts/platform-catalog -f $t/catalog.yaml -f $t/groups.yaml >"$out" 2>"$log"; then
   expect "$out" $t/catalog.yaml
 else err "platform-catalog: $(head -1 "$log")"; fi
-helm template catalog charts/platform-catalog -f $t/catalog.yaml -f $t/fail-unknown-component.groups.yaml >/dev/null 2>&1 \
-  && err "platform-catalog: unknown component in groups rendered but must fail"
+for f in $t/fail-*.groups.yaml; do
+  helm template catalog charts/platform-catalog -f $t/catalog.yaml -f "$f" >/dev/null 2>&1 \
+    && err "$f rendered but must fail"
+done
 
 tests/approver-sim.sh >"$out" 2>&1 || err "approver-sim: $(grep FAIL "$out")"
 (( fail == 0 )) && echo "validate: OK"

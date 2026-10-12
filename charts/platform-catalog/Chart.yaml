@@ -1,9 +1,10 @@
 apiVersion: v2
 name: platform-catalog
 description: >-
-  Hub chart. Renders one Argo CD ApplicationSet plus one ACM
-  Placement/Policy/PlacementBinding per platform component, selecting clusters
-  by group. Components and groups come from the config repository
-  (catalog.yaml, groups.yaml).
+  Hub chart. Renders, per platform component, an ACM Placement built from the
+  group filters (ClusterSets, labels, claims), an Argo CD ApplicationSet fed by
+  that Placement's decisions, and an ACM health Policy on the same selection.
+  Components and groups come from the config repository (catalog.yaml,
+  groups.yaml).
 type: application
-version: 0.1.0
+version: 0.2.0

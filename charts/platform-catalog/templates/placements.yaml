@@ -1,0 +1,23 @@
+{{- /*
+One ACM Placement per component in the Argo CD namespace. Its
+PlacementDecisions feed the component's ApplicationSet (clusterDecisionResource
+generator). The health Policy binds an identical Placement in the policy
+namespace (policies.yaml).
+*/ -}}
+{{- $v := .Values -}}
+{{- range $name, $c := $v.components }}
+{{- if include "platform.enabled" $c }}
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: {{ $name }}
+  namespace: {{ $v.argocd.namespace }}
+  labels:
+    platform/component: {{ $name }}
+  annotations:
+    platform/groups: {{ include "platform.groupsOf" (dict "name" $name "root" $) | fromJsonArray | join "," | quote }}
+spec:
+  {{- include "platform.placementSpec" (dict "name" $name "root" $) | nindent 2 }}
+{{- end }}
+{{- end }}

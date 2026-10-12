@@ -2,7 +2,6 @@
 {{- $v := .Values -}}
 {{- range $name, $c := $v.components }}
 {{- if include "platform.enabled" $c }}
-{{- $sel := include "platform.selection" (dict "name" $name "root" $) | fromYaml }}
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
@@ -12,24 +11,26 @@ metadata:
   labels:
     platform/component: {{ $name }}
   annotations:
-    platform/groups: {{ include "platform.groupsOf" (dict "name" $name "root" $) | quote }}
+    platform/groups: {{ include "platform.groupsOf" (dict "name" $name "root" $) | fromJsonArray | join "," | quote }}
 spec:
   goTemplate: true
   syncPolicy:
     preserveResourcesOnDeletion: {{ $v.argocd.preserveResourcesOnDeletion }}
-  # Generators are OR-ed; the two selectors are mutually exclusive so a cluster
-  # never produces two Applications with the same name.
+  # Clusters come from the component's ACM Placement (placements.yaml); the
+  # merge with the clusters generator adds each cluster's labels, used by
+  # {label:<key>} value-file paths.
   generators:
-    {{- with $sel.byGroup }}
-    # clusters whose {{ $v.labels.group }} label includes "{{ $name }}" (minus opt-outs)
-    - clusters:
-        selector:
-          {{- toYaml . | nindent 10 }}
-    {{- end }}
-    # clusters explicitly opted in
-    - clusters:
-        selector:
-          {{- toYaml $sel.optIn | nindent 10 }}
+    - merge:
+        mergeKeys:
+          - name
+        generators:
+          - clusterDecisionResource:
+              configMapRef: {{ $v.acm.placementConfigMap }}
+              labelSelector:
+                matchLabels:
+                  cluster.open-cluster-management.io/placement: {{ $name }}
+              requeueAfterSeconds: {{ $v.acm.requeueAfterSeconds }}
+          - clusters: {}
   template:
     metadata:
       name: '{{`{{ .name }}`}}-{{ $name }}'
